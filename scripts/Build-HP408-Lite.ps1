@@ -70,6 +70,21 @@ $RemoveCaps = @(
   'Microsoft.Windows.WordPad*','Print.Fax.Scan*'
 )
 
+# Add drivers one .inf at a time: skips HP installer metadata (HPSetup.inf etc.)
+# and keeps going if a single package is rejected.
+function Add-Drivers($ImagePath) {
+  $ok = 0; $skip = 0
+  Get-ChildItem $DrvDir -Recurse -Filter *.inf | ForEach-Object {
+    $head = Get-Content $_.FullName -TotalCount 60 -ErrorAction SilentlyContinue | Out-String
+    if ($_.Name -match '^(HPSetup|autorun|setup)\.inf$' -or $head -notmatch '(?i)ClassGuid') { $skip++; return }
+    try   { Add-WindowsDriver -Path $ImagePath -Driver $_.FullName -ErrorAction Stop | Out-Null; $ok++ }
+    catch { Write-Host "    skipped $($_.Exception.Message.Split([char]10)[0])"; $skip++ }
+  }
+  Write-Host "  Drivers added: $ok, skipped: $skip"
+  if ($env:GITHUB_ACTIONS) { Write-Host "::notice title=Drivers::$ImagePath - added $ok, skipped $skip" }
+  if ($ok -eq 0) { throw 'No drivers could be added' }
+}
+
 function Step($t) {
   Write-Host "`n==== $t ====" -ForegroundColor Cyan
   if ($env:GITHUB_ACTIONS) { Write-Host "::notice title=Build stage::$t" }   # visible progress in GitHub
@@ -151,7 +166,7 @@ Mount-WindowsImage -ImagePath $wim -Index 1 -Path $Mount -ErrorAction Stop | Out
 
 try {
   Write-Host '  Adding drivers...'
-  Add-WindowsDriver -Path $Mount -Driver $DrvDir -Recurse -ErrorAction Continue | Out-Null
+  Add-Drivers $Mount
 
   # Windows updates (PowerShell cmdlet - avoids the dism.exe timeouts)
   if (Test-Path $UpdSrc) {
@@ -198,7 +213,7 @@ try {
   foreach ($v in 'SilentInstalledAppsEnabled','PreInstalledAppsEnabled','OemPreInstalledAppsEnabled','ContentDeliveryAllowed','SystemPaneSuggestionsEnabled','SubscribedContent-338388Enabled') {
     reg add 'HKLM\OFF_DEF\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager' /v $v /t REG_DWORD /d 0 /f | Out-Null
   }
-  reg delete 'HKLM\OFF_DEF\Software\Microsoft\Windows\CurrentVersion\Run' /v OneDriveSetup /f 2>$null | Out-Null
+  cmd /c "reg delete HKLM\OFF_DEF\Software\Microsoft\Windows\CurrentVersion\Run /v OneDriveSetup /f >nul 2>&1"
   # Backup trigger for app installs at first admin logon
   reg add 'HKLM\OFF_SW\Microsoft\Windows\CurrentVersion\RunOnce' /v HP408PostInstall /t REG_SZ /d 'cmd.exe /c %WINDIR%\Setup\Scripts\postinstall.cmd' /f | Out-Null
   [gc]::Collect(); Start-Sleep 2
@@ -244,8 +259,8 @@ echo Finished %date% %time% >> "%L%"
 }
 catch {
   Write-Host "ERROR: $_" -ForegroundColor Red
-  reg unload HKLM\OFF_DEF 2>$null | Out-Null
-  reg unload HKLM\OFF_SW  2>$null | Out-Null
+  cmd /c "reg unload HKLM\OFF_DEF >nul 2>&1"
+  cmd /c "reg unload HKLM\OFF_SW >nul 2>&1"
   Dismount-WindowsImage -Path $Mount -Discard -ErrorAction SilentlyContinue | Out-Null
   throw
 }
@@ -253,7 +268,7 @@ catch {
 # ---------------- 6. Drivers into Windows Setup ----------------
 Step '6/8 Adding drivers to Windows Setup (touch during install)'
 Mount-WindowsImage -ImagePath "$IsoDir\sources\boot.wim" -Index 2 -Path $Mount -ErrorAction Stop | Out-Null
-Add-WindowsDriver -Path $Mount -Driver $DrvDir -Recurse -ErrorAction Continue | Out-Null
+Add-Drivers $Mount
 Dismount-WindowsImage -Path $Mount -Save -ErrorAction Stop | Out-Null
 
 # ---------------- 7. Maximum compression ----------------
