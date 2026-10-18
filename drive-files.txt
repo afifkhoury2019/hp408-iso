@@ -1,0 +1,13 @@
+# Google Drive files the build downloads (folder must be shared "Anyone with the link")
+# format: <file id> <save as>
+13olqH62UZSyQ7T5FW9hAEF6-VXf8lAjL Windows.iso
+1bVilOuVZz1A7Eb4HZaYHFDFd6Eq8e90Y SoftPaqs/sp73491.exe
+1rcnNHGVCkoLp7vpeT4YBqo_aApwwe6cv SoftPaqs/sp73063.exe
+1UQlh6PacT6u584i6nZZbgvXQPbrqxd7G SoftPaqs/sp73065.exe
+14dAqsBX32gR6m2cgL9tFrzZuTs2B8aez SoftPaqs/sp73066.exe
+1gej0v70loAVK4V5TdLK1ONBlDE5ppXlb SoftPaqs/sp73067.exe
+1jE_Zgei7jn0yson_JoWbmfJbkE17F2eZ SoftPaqs/sp73069.exe
+1xNs4XRSyHfCaggdv4Sc2Ojn3TpmL3htp SoftPaqs/sp73070.exe
+17sxvstRhGz_v_sIv7YxuA1S_stv-EBpM SoftPaqs/sp74360.exe
+1bG8XFiOSojYCq8m3OmMXIMthzdTpuuYo SoftPaqs/sp74361.exe
+19B62hDX-I0dogSIqso6nOux7rbfD5jer SoftPaqs/sp66125.exe

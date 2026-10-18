@@ -1,0 +1,97 @@
+name: Build HP408 Lite ISO
+
+# Runs on a fresh Windows virtual machine hosted by GitHub.
+# Start it from the Actions tab > "Build HP408 Lite ISO" > Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      edition:
+        description: 'Windows edition to keep (Pro activates with the tablet''s built-in key)'
+        type: choice
+        options: ['Windows 10 Home', 'Windows 10 Pro']
+        default: 'Windows 10 Home'
+      update_url:
+        description: 'Optional: direct .msu link of a 22H2 x86 Cumulative Update (Microsoft Update Catalog)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Get repository files
+        uses: actions/checkout@v4
+
+      - name: Pick the build drive and free up space
+        shell: pwsh
+        run: |
+          # Remove large preinstalled SDKs we never use (frees ~20 GB)
+          foreach ($p in 'C:\Android','C:\hostedtoolcache\windows\CodeQL','C:\Program Files\dotnet\sdk','C:\ghcup','C:\Rust') {
+            if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+          }
+          $drv = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -in 'C','D' } |
+                 Sort-Object Free -Descending | Select-Object -First 1
+          $work = "$($drv.Name):\HP408Build"
+          New-Item "$work\SoftPaqs","$work\Apps","$work\Updates" -ItemType Directory -Force | Out-Null
+          "WORK=$work" | Out-File $env:GITHUB_ENV -Append
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}
+          Write-Host "Build folder: $work"
+
+      - name: Install Windows ADK Deployment Tools (oscdimg)
+        shell: pwsh
+        run: |
+          choco install windows-adk-deploy -y --no-progress
+          Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName
+
+      - name: Download Windows ISO and HP drivers from Google Drive
+        shell: pwsh
+        run: |
+          python -m pip install --quiet gdown
+          Get-Content drive-files.txt | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Object {
+            $id, $name = $_ -split '\s+', 2
+            $out = Join-Path $env:WORK $name
+            Write-Host "Downloading $name ..."
+            gdown "https://drive.google.com/uc?id=$id" -O $out --quiet
+            if (-not (Test-Path $out) -or (Get-Item $out).Length -lt 100KB) {
+              throw "Download of $name failed - is the Drive folder shared as 'Anyone with the link'?"
+            }
+            Write-Host ("  OK {0:N1} MB" -f ((Get-Item $out).Length / 1MB))
+          }
+
+      - name: Download apps (WinRAR, Chrome, LibreOffice, SumatraPDF)
+        shell: pwsh
+        run: ./scripts/Get-Apps.ps1 -OutDir "$env:WORK\Apps"
+
+      - name: Download Windows update (optional)
+        if: ${{ inputs.update_url != '' }}
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest '${{ inputs.update_url }}' -OutFile "$env:WORK\Updates\cumulative.msu" -UseBasicParsing
+          Write-Host ("Update: {0:N0} MB" -f ((Get-Item "$env:WORK\Updates\cumulative.msu").Length / 1MB))
+
+      - name: Build the Lite ISO
+        shell: powershell   # Windows PowerShell 5.1 has the DISM module built in
+        run: |
+          ./scripts/Build-HP408-Lite.ps1 -SourceIso "$env:WORK\Windows.iso" -Work $env:WORK -Edition '${{ inputs.edition }}'
+
+      - name: Collect the ISO
+        shell: pwsh
+        run: |
+          $iso = Get-ChildItem $env:WORK -Filter 'HP408G1_*.iso' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $iso) { throw 'ISO was not created' }
+          "ISO_PATH=$($iso.FullName)" | Out-File $env:GITHUB_ENV -Append
+          $hash = (Get-FileHash $iso.FullName -Algorithm SHA256).Hash
+          "## ISO ready`n- File: $($iso.Name)`n- Size: $([math]::Round($iso.Length/1GB,2)) GB`n- SHA256: $hash" |
+            Out-File $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: HP408G1-Win10-Lite-ISO
+          path: ${{ env.ISO_PATH }}
+          compression-level: 0
+          retention-days: 5
