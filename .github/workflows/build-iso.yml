@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Get repository files
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Pick the build drive and free up space
         shell: pwsh
@@ -76,7 +76,23 @@ jobs:
       - name: Build the Lite ISO
         shell: powershell   # Windows PowerShell 5.1 has the DISM module built in
         run: |
-          ./scripts/Build-HP408-Lite.ps1 -SourceIso "$env:WORK\Windows.iso" -Work $env:WORK -Edition '${{ inputs.edition }}'
+          $log = "$env:WORK\build.log"
+          Start-Transcript $log | Out-Null
+          $ok = $true
+          try {
+            & ./scripts/Build-HP408-Lite.ps1 -SourceIso "$env:WORK\Windows.iso" -Work $env:WORK -Edition '${{ inputs.edition }}'
+          } catch {
+            $ok = $false; $err = $_
+          }
+          Stop-Transcript | Out-Null
+          if (-not $ok) {
+            function Esc($t) { "$t".Replace('%','%25').Replace("`r",'').Replace("`n",'%0A') }
+            $where = "line $($err.InvocationInfo.ScriptLineNumber): $($err.InvocationInfo.Line.Trim())"
+            Write-Host "::error title=Build failed::$(Esc "$($err.Exception.Message) | $where")"
+            $tail = (Get-Content $log -Tail 60 | Where-Object { $_.Trim() }) -join "`n"
+            Write-Host "::error title=Build log (last lines)::$(Esc $tail)"
+            exit 1
+          }
 
       - name: Collect the ISO
         shell: pwsh

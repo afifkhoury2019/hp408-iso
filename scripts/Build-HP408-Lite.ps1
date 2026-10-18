@@ -28,7 +28,9 @@ param(
   [string]$Edition   = 'Windows 10 Home'
 )
 
-$ErrorActionPreference = 'Stop'
+# Continue by default: command-line tools that print warnings must not abort the build.
+# The critical steps below use -ErrorAction Stop or explicit exit-code checks.
+$ErrorActionPreference = 'Continue'
 
 # ---------------- Settings ----------------
 
@@ -68,7 +70,10 @@ $RemoveCaps = @(
   'Microsoft.Windows.WordPad*','Print.Fax.Scan*'
 )
 
-function Step($t) { Write-Host "`n==== $t ====" -ForegroundColor Cyan }
+function Step($t) {
+  Write-Host "`n==== $t ====" -ForegroundColor Cyan
+  if ($env:GITHUB_ACTIONS) { Write-Host "::notice title=Build stage::$t" }   # visible progress in GitHub
+}
 
 # ---------------- Checks ----------------
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrators')) {
@@ -92,8 +97,9 @@ foreach ($d in $IsoDir,$DrvDir,$Mount) { if (Test-Path $d) { Remove-Item $d -Rec
 
 # ---------------- 1. Copy ISO contents ----------------
 Step '1/8 Copying ISO contents'
-$img = Mount-DiskImage -ImagePath $SourceIso -PassThru
-$dl  = ($img | Get-Volume).DriveLetter
+$img = Mount-DiskImage -ImagePath $SourceIso -PassThru -ErrorAction Stop
+$dl  = ($img | Get-Volume -ErrorAction Stop).DriveLetter
+if (-not $dl) { throw 'Could not get a drive letter for the mounted ISO' }
 robocopy "$($dl):\" $IsoDir /E /NFL /NDL /NJH /NJS | Out-Null
 Dismount-DiskImage -ImagePath $SourceIso | Out-Null
 attrib -r "$IsoDir\*.*" /s /d
@@ -101,7 +107,8 @@ attrib -r "$IsoDir\*.*" /s /d
 # ---------------- 2. Keep only Windows 10 Home ----------------
 Step '2/8 Extracting Windows 10 Home only'
 $src = @("$IsoDir\sources\install.wim","$IsoDir\sources\install.esd") | Where-Object { Test-Path $_ } | Select-Object -First 1
-$allImg  = @(Get-WindowsImage -ImagePath $src)
+if (-not $src) { throw 'No install.wim / install.esd found in the ISO' }
+$allImg  = @(Get-WindowsImage -ImagePath $src -ErrorAction Stop)
 $homeImg = $allImg | Where-Object { $_.ImageName -eq $Edition } | Select-Object -First 1
 if (-not $homeImg -and $allImg.Count -eq 1) {
   $homeImg = $allImg[0]   # single-edition ISO: just use it
@@ -140,7 +147,7 @@ if ($infCount -eq 0) { throw 'No drivers extracted - install 7-Zip and retry.' }
 
 # ---------------- 4. Customise Windows image ----------------
 Step '4/8 Mounting Windows image'
-Mount-WindowsImage -ImagePath $wim -Index 1 -Path $Mount | Out-Null
+Mount-WindowsImage -ImagePath $wim -Index 1 -Path $Mount -ErrorAction Stop | Out-Null
 
 try {
   Write-Host '  Adding drivers...'
@@ -233,7 +240,7 @@ echo Finished %date% %time% >> "%L%"
   try { Repair-WindowsImage -Path $Mount -StartComponentCleanup -ResetBase | Out-Null }
   catch { Write-Host "  WARNING: cleanup skipped - $($_.Exception.Message)" -ForegroundColor Yellow }
 
-  Dismount-WindowsImage -Path $Mount -Save | Out-Null
+  Dismount-WindowsImage -Path $Mount -Save -ErrorAction Stop | Out-Null
 }
 catch {
   Write-Host "ERROR: $_" -ForegroundColor Red
@@ -245,9 +252,9 @@ catch {
 
 # ---------------- 6. Drivers into Windows Setup ----------------
 Step '6/8 Adding drivers to Windows Setup (touch during install)'
-Mount-WindowsImage -ImagePath "$IsoDir\sources\boot.wim" -Index 2 -Path $Mount | Out-Null
+Mount-WindowsImage -ImagePath "$IsoDir\sources\boot.wim" -Index 2 -Path $Mount -ErrorAction Stop | Out-Null
 Add-WindowsDriver -Path $Mount -Driver $DrvDir -Recurse -ErrorAction Continue | Out-Null
-Dismount-WindowsImage -Path $Mount -Save | Out-Null
+Dismount-WindowsImage -Path $Mount -Save -ErrorAction Stop | Out-Null
 
 # ---------------- 7. Maximum compression ----------------
 Step '7/8 Compressing to install.esd (slow, smallest size)'
