@@ -42,10 +42,37 @@ jobs:
       - name: Install Windows ADK Deployment Tools (oscdimg)
         shell: pwsh
         run: |
-          choco install windows-adk-deploy -y --no-progress
-          if ($LASTEXITCODE) { Write-Host "::error title=ADK install::choco exit code $LASTEXITCODE"; exit 1 }
-          Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName
+          function Find-Oscdimg {
+            foreach ($root in "${env:ProgramFiles(x86)}\Windows Kits", "$env:ProgramFiles\Windows Kits", 'C:\ProgramData\chocolatey\lib') {
+              if (Test-Path $root) {
+                $f = Get-ChildItem $root -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue |
+                     Sort-Object { $_.FullName -notmatch '\\amd64\\' } | Select-Object -First 1
+                if ($f) { return $f.FullName }
+              }
+            }
+          }
+          $o = Find-Oscdimg
+          if (-not $o) {
+            Write-Host 'Trying Chocolatey...'
+            choco install windows-adk-deploy -y --no-progress
+            $o = Find-Oscdimg
+          }
+          if (-not $o) {
+            # Official Microsoft ADK online installer, Deployment Tools only
+            $ProgressPreference = 'SilentlyContinue'
+            foreach ($link in 'https://go.microsoft.com/fwlink/?linkid=2289980','https://go.microsoft.com/fwlink/?linkid=2271337','https://go.microsoft.com/fwlink/?linkid=2196127') {
+              try {
+                Write-Host "Trying ADK installer $link"
+                Invoke-WebRequest $link -OutFile "$env:RUNNER_TEMP\adksetup.exe" -UseBasicParsing
+                Start-Process "$env:RUNNER_TEMP\adksetup.exe" -ArgumentList '/quiet','/norestart','/ceip off','/features OptionId.DeploymentTools' -Wait
+                $o = Find-Oscdimg
+                if ($o) { break }
+              } catch { Write-Host "  failed: $($_.Exception.Message)" }
+            }
+          }
+          if (-not $o) { Write-Host "::error title=ADK install::oscdimg.exe could not be installed"; exit 1 }
+          Copy-Item $o "$env:WORK\oscdimg.exe" -Force
+          Write-Host "::notice title=oscdimg::$o"
 
       - name: Restore cached downloads
         id: dlcache
