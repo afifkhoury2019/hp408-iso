@@ -97,7 +97,7 @@ jobs:
       - name: Collect the ISO
         shell: pwsh
         run: |
-          $iso = Get-ChildItem $env:WORK -Filter 'HP408G1_*.iso' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $iso = Get-ChildItem $env:WORK -Filter 'AFIF-TECH_*.iso' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $iso) { throw 'ISO was not created' }
           "ISO_PATH=$($iso.FullName)" | Out-File $env:GITHUB_ENV -Append
           $hash = (Get-FileHash $iso.FullName -Algorithm SHA256).Hash
@@ -105,9 +105,9 @@ jobs:
             Out-File $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Upload ISO
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: HP408G1-Win10-Lite-ISO
+          name: AFIF-TECH-Win10-HP408-ISO
           path: ${{ env.ISO_PATH }}
           compression-level: 0
           retention-days: 5
