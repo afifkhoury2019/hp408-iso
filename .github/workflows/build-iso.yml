@@ -43,27 +43,55 @@ jobs:
         shell: pwsh
         run: |
           choco install windows-adk-deploy -y --no-progress
+          if ($LASTEXITCODE) { Write-Host "::error title=ADK install::choco exit code $LASTEXITCODE"; exit 1 }
           Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty FullName
+
+      - name: Restore cached downloads
+        id: dlcache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.WORK }}\dl
+          key: drive-${{ hashFiles('drive-files.txt') }}
 
       - name: Download Windows ISO and HP drivers from Google Drive
         shell: pwsh
         run: |
           python -m pip install --quiet gdown
+          $dl = Join-Path $env:WORK 'dl'
+          New-Item $dl -ItemType Directory -Force | Out-Null
           Get-Content drive-files.txt | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Object {
             $id, $name = $_ -split '\s+', 2
-            $out = Join-Path $env:WORK $name
-            Write-Host "Downloading $name ..."
-            gdown "https://drive.google.com/uc?id=$id" -O $out --quiet
-            if (-not (Test-Path $out) -or (Get-Item $out).Length -lt 100KB) {
-              throw "Download of $name failed - is the Drive folder shared as 'Anyone with the link'?"
+            $cached = Join-Path $dl ($name -replace '[\\/]','_')
+            if ((Test-Path $cached) -and (Get-Item $cached).Length -gt 100KB) {
+              Write-Host "Cached: $name"
+            } else {
+              Write-Host "Downloading $name ..."
+              $out = gdown "https://drive.google.com/uc?id=$id" -O $cached 2>&1 | Out-String
+              if (-not (Test-Path $cached) -or (Get-Item $cached).Length -lt 100KB) {
+                $msg = ($out -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 6) -join ' | '
+                Write-Host "::error title=Google Drive download failed ($name)::$msg"
+                exit 1
+              }
             }
-            Write-Host ("  OK {0:N1} MB" -f ((Get-Item $out).Length / 1MB))
+            $dest = Join-Path $env:WORK $name
+            New-Item (Split-Path $dest) -ItemType Directory -Force | Out-Null
+            Copy-Item $cached $dest -Force
+            Write-Host ("  OK {0:N1} MB" -f ((Get-Item $dest).Length / 1MB))
           }
+
+      - name: Save downloads to cache (next builds skip Google Drive)
+        if: steps.dlcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WORK }}\dl
+          key: drive-${{ hashFiles('drive-files.txt') }}
 
       - name: Download apps (WinRAR, Chrome, LibreOffice, SumatraPDF)
         shell: pwsh
-        run: ./scripts/Get-Apps.ps1 -OutDir "$env:WORK\Apps"
+        run: |
+          try { ./scripts/Get-Apps.ps1 -OutDir "$env:WORK\Apps" }
+          catch { Write-Host "::error title=App downloads::$($_.Exception.Message)"; exit 1 }
 
       - name: Download Windows update (optional)
         if: ${{ inputs.update_url != '' }}
